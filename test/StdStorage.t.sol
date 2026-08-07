@@ -351,6 +351,39 @@ contract StdStorageTest is Test {
         assertEq(test.edgeCaseArray(0), 1);
     }
 
+    // Regression tests for https://github.com/foundry-rs/forge-std/issues/345
+    function test_StorageFindShortString() public {
+        ShortBytesStorage target = new ShortBytesStorage();
+        assertEq(stdstore.target(address(target)).sig(target.exists.selector).find(), 0);
+    }
+
+    function test_StorageFindShortBytesWithDirtyPadding() public {
+        ShortBytesStorage target = new ShortBytesStorage();
+        bytes32 slot = bytes32(uint256(1));
+        bytes32 dirtyValue = vm.load(address(target), slot) | bytes32(uint256(0xDEADBE) << 8);
+        vm.store(address(target), slot, dirtyValue);
+        assertEq(target.data(), hex"616263");
+        assertEq(stdstore.target(address(target)).sig(target.data.selector).find(), 1);
+        assertEq(vm.load(address(target), slot), dirtyValue);
+    }
+
+    function test_StorageFindCanonicalLookingStaticReturn() public {
+        CanonicalLookingStaticReturn target = new CanonicalLookingStaticReturn();
+        assertEq(stdstore.target(address(target)).sig(target.values.selector).depth(0).find(), 0);
+        assertEq(stdstore.target(address(target)).sig(target.values.selector).depth(1).find(), 1);
+    }
+
+    function test_RevertStorageFindRestoresFailedShortBytesProbe() public {
+        RevertingEmptyString target = new RevertingEmptyString();
+        vm.expectRevert(bytes("stdStorage find(StdStorage): Slot(s) not found."));
+        this.findSlot(address(target), target.value.selector);
+        assertEq(target.value(), "A");
+    }
+
+    function findSlot(address target, bytes4 sig) external {
+        stdstore.target(target).sig(sig).find();
+    }
+
     // Regression test for https://github.com/foundry-rs/forge-std/issues/740
     // `find()` used to infinite-loop on tokens whose `balanceOf` reads multiple
     // storage slots and returns a derived value (reflection tokens).
@@ -374,6 +407,30 @@ contract StorageTestTarget {
 
     function expectRevertStorageConst() public {
         stdstore.target(address(test)).sig("const()").find();
+    }
+}
+
+contract ShortBytesStorage {
+    string public exists = "thequickbrownfoxjumpsoverthelaz";
+    bytes public data = hex"616263";
+}
+
+contract CanonicalLookingStaticReturn {
+    uint256 private first = 32;
+    uint256 private second = 1;
+    bytes32 private decoy = bytes32("A") | bytes32(uint256(2));
+
+    function values() public view returns (uint256, uint256, bytes32) {
+        return (first, second, decoy & ~bytes32(uint256(0xFF)));
+    }
+}
+
+contract RevertingEmptyString {
+    string private storedValue = "A";
+
+    function value() public view returns (string memory) {
+        require(bytes(storedValue).length != 0);
+        return storedValue;
     }
 }
 
